@@ -81,7 +81,7 @@ function fetchPrebuilt() {
 // Attempt to fetch prebuilt binary.
 Q.ninvoke(fs, "mkdir", paths.release).then(fetchPrebuilt, fetchPrebuilt)
 
-.fail(function() {
+.fail(function(ex) {
   if (!buildOnly) {
     console.info("[nodegit] Failed to install prebuilt, attempting compile.");
   }
@@ -93,170 +93,170 @@ Q.ninvoke(fs, "mkdir", paths.release).then(fetchPrebuilt, fetchPrebuilt)
     Q.nfcall(which, "python2"),
     Q.nfcall(which, "python")
   ])
-})
 
-// Determine if all the dependency requirements are met.
-.then(function(results) {
-  console.info("[nodegit] Determining dependencies.");
+  // Determine if all the dependency requirements are met.
+  .then(function(results) {
+    console.info("[nodegit] Determining dependencies.");
 
-  // Assign to reusable variables.
-  python = results[0].value || results[1].value;
+    // Assign to reusable variables.
+    python = results[0].value || results[1].value;
 
-  // Missing Python.
-  if (!python) {
-    throw new Error("Python is required to build libgit2.");
-  }
-
-  // Now lets check the Python version to ensure it"s < 3.
-  return Q.nfcall(exec, python + " --version").then(function(version) {
-    if (version[1].indexOf("Python 3") === 0) {
-      throw new Error("Incorrect version of Python, gyp requires < 3.");
+    // Missing Python.
+    if (!python) {
+      throw new Error("Python is required to build libgit2.");
     }
+
+    // Now lets check the Python version to ensure it"s < 3.
+    return Q.nfcall(exec, python + " --version").then(function(version) {
+      if (version[1].indexOf("Python 3") === 0) {
+        throw new Error("Incorrect version of Python, gyp requires < 3.");
+      }
+    });
+  })
+
+  // Successfully found all dependencies.  First step is to detect the vendor
+  // directory.
+  .then(function() {
+    console.info("[nodegit] Detecting vendor/libgit2.");
+
+    return Q.ninvoke(fs, "stat", paths.libgit2).then(function() {
+      return Q.ninvoke(fs, "stat", paths.libgit2 + pkg.libgit2.sha);
+    }).fail(function() {
+      console.info("[nodegit] Removing outdated vendor/libgit2.");
+
+      // This directory is outdated, remove.
+      throw Q.ninvoke(rimraf, null, paths.libgit2);
+    });
+  })
+
+  // If the directory already exists, no need to refetch.
+  .fail(function() {
+    // Otherwise fetch the libgit2 source from GitHub.
+    console.info("[nodegit] Fetching vendor/libgit2.");
+
+    var url = "https://github.com/libgit2/libgit2/tarball/" + pkg.libgit2.sha;
+
+    var extract = tar.Extract({
+      path: paths.libgit2,
+      strip: true
+    });
+
+    // First extract from Zlib and then extract from Tar.
+    var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
+
+    return Q.ninvoke(expand, "on", "end").then(function() {
+      // Write out a sha file for testing in the future.
+      return Q.ninvoke(fs, "writeFile", paths.libgit2 + pkg.libgit2.sha, "");
+    });
+  })
+
+  // Grab libssh2 if needed.
+  .then(function() {
+    console.info("[nodegit] Detecting vendor/libssh2.");
+
+    return Q.ninvoke(fs, "stat", paths.libssh2).then(function() {
+      return Q.ninvoke(fs, "stat", paths.libssh2 + pkg.libssh2.version);
+    }).fail(function() {
+      console.info("[nodegit] Removing outdated vendor/libssh2.");
+
+      // This directory is outdated, remove.
+      throw Q.ninvoke(rimraf, null, paths.libssh2);
+    });
+  })
+
+  // If the directory already exists, no need to refetch.
+  .fail(function() {
+    // Otherwise fetch the libssh2 source.
+    console.info("[nodegit] Fetching vendor/libssh2.");
+
+    var url = pkg.libssh2.url;
+
+    var extract = tar.Extract({
+      path: paths.libssh2,
+      strip: true
+    });
+
+    // First extract from Zlib and then extract from Tar.
+    var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
+
+    return Q.ninvoke(expand, "on", "end").then(function() {
+      // Write out a sha file for testing in the future.
+      return Q.ninvoke(fs, "writeFile", paths.libssh2 + pkg.libssh2.version, "");
+    }).then(function() {
+      // Only run the configuration script in a BSD-like environment.
+      if (process.platform !== "win32") {
+        return Q.nfcall(exec, "cd " + paths.libssh2 + " ; " + paths.libssh2 +
+          "configure");
+      }
+    });
+  })
+
+  // Grab http-parser if needed.
+  .then(function() {
+    console.info("[nodegit] Detecting vendor/http_parser.");
+
+    return Q.ninvoke(fs, "stat", paths.http_parser).then(function() {
+      return Q.ninvoke(fs, "stat", paths.http_parser + pkg.http_parser.version);
+    }).fail(function() {
+      console.info("[nodegit] Removing outdated vendor/http_parser.");
+
+      // This directory is outdated, remove.
+      throw Q.ninvoke(rimraf, null, paths.http_parser);
+    });
+  })
+
+  // If the directory already exists, no need to refetch.
+  .fail(function() {
+    // Otherwise fetch the http_parser source.
+    console.info("[nodegit] Fetching vendor/http_parser.");
+
+    var url = pkg.http_parser.url;
+
+    var extract = tar.Extract({
+      path: paths.http_parser,
+      strip: true
+    });
+
+    // First extract from Zlib and then extract from Tar.
+    var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
+
+    return Q.ninvoke(expand, "on", "end").then(function() {
+      // Write out a sha file for testing in the future.
+      return Q.ninvoke(fs, "writeFile", paths.http_parser +
+        pkg.http_parser.version, "");
+    });
+  })
+
+
+  // Build the native module using node-gyp.
+  .then(function() {
+    console.info("[nodegit] Building native node module.");
+    var pythonFlag = " --python \"" + python + "\"";
+
+    return Q.nfcall(exec, systemPath([
+      ".", "node_modules", ".bin", "node-gyp clean configure build" + pythonFlag
+    ]), {
+      cwd: ".",
+      maxBuffer: Number.MAX_VALUE
+    });
+  })
+
+  // Display a warning message about failing to build native node module.
+  .fail(function(message) {
+    console.info("[nodegit] Failed to build and install nodegit.");
+    console.info(message.message);
+    console.info(message.stack);
+  })
+
+  // Display a success message.
+  .then(function() {
+    console.info("[nodegit] Completed installation successfully.");
+  })
+
+  // Display a warning message about failing to build native node module.
+  .fail(function(message) {
+    console.info("[nodegit] Failed to build nodegit.");
+    console.info(message.message);
+    console.info(message.stack);
   });
-})
-
-// Successfully found all dependencies.  First step is to detect the vendor
-// directory.
-.then(function() {
-  console.info("[nodegit] Detecting vendor/libgit2.");
-
-  return Q.ninvoke(fs, "stat", paths.libgit2).then(function() {
-    return Q.ninvoke(fs, "stat", paths.libgit2 + pkg.libgit2.sha);
-  }).fail(function() {
-    console.info("[nodegit] Removing outdated vendor/libgit2.");
-
-    // This directory is outdated, remove.
-    throw Q.ninvoke(rimraf, null, paths.libgit2);
-  });
-})
-
-// If the directory already exists, no need to refetch.
-.fail(function() {
-  // Otherwise fetch the libgit2 source from GitHub.
-  console.info("[nodegit] Fetching vendor/libgit2.");
-
-  var url = "https://github.com/libgit2/libgit2/tarball/" + pkg.libgit2.sha;
-
-  var extract = tar.Extract({
-    path: paths.libgit2,
-    strip: true
-  });
-
-  // First extract from Zlib and then extract from Tar.
-  var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
-
-  return Q.ninvoke(expand, "on", "end").then(function() {
-    // Write out a sha file for testing in the future.
-    return Q.ninvoke(fs, "writeFile", paths.libgit2 + pkg.libgit2.sha, "");
-  });
-})
-
-// Grab libssh2 if needed.
-.then(function() {
-  console.info("[nodegit] Detecting vendor/libssh2.");
-
-  return Q.ninvoke(fs, "stat", paths.libssh2).then(function() {
-    return Q.ninvoke(fs, "stat", paths.libssh2 + pkg.libssh2.version);
-  }).fail(function() {
-    console.info("[nodegit] Removing outdated vendor/libssh2.");
-
-    // This directory is outdated, remove.
-    throw Q.ninvoke(rimraf, null, paths.libssh2);
-  });
-})
-
-// If the directory already exists, no need to refetch.
-.fail(function() {
-  // Otherwise fetch the libssh2 source.
-  console.info("[nodegit] Fetching vendor/libssh2.");
-
-  var url = pkg.libssh2.url;
-
-  var extract = tar.Extract({
-    path: paths.libssh2,
-    strip: true
-  });
-
-  // First extract from Zlib and then extract from Tar.
-  var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
-
-  return Q.ninvoke(expand, "on", "end").then(function() {
-    // Write out a sha file for testing in the future.
-    return Q.ninvoke(fs, "writeFile", paths.libssh2 + pkg.libssh2.version, "");
-  }).then(function() {
-    // Only run the configuration script in a BSD-like environment.
-    if (process.platform !== "win32") {
-      return Q.nfcall(exec, "cd " + paths.libssh2 + " ; " + paths.libssh2 +
-        "configure");
-    }
-  });
-})
-
-// Grab http-parser if needed.
-.then(function() {
-  console.info("[nodegit] Detecting vendor/http_parser.");
-
-  return Q.ninvoke(fs, "stat", paths.http_parser).then(function() {
-    return Q.ninvoke(fs, "stat", paths.http_parser + pkg.http_parser.version);
-  }).fail(function() {
-    console.info("[nodegit] Removing outdated vendor/http_parser.");
-
-    // This directory is outdated, remove.
-    throw Q.ninvoke(rimraf, null, paths.http_parser);
-  });
-})
-
-// If the directory already exists, no need to refetch.
-.fail(function() {
-  // Otherwise fetch the http_parser source.
-  console.info("[nodegit] Fetching vendor/http_parser.");
-
-  var url = pkg.http_parser.url;
-
-  var extract = tar.Extract({
-    path: paths.http_parser,
-    strip: true
-  });
-
-  // First extract from Zlib and then extract from Tar.
-  var expand = request.get(url).pipe(zlib.createUnzip()).pipe(extract);
-
-  return Q.ninvoke(expand, "on", "end").then(function() {
-    // Write out a sha file for testing in the future.
-    return Q.ninvoke(fs, "writeFile", paths.http_parser +
-      pkg.http_parser.version, "");
-  });
-})
-
-
-// Build the native module using node-gyp.
-.then(function() {
-  console.info("[nodegit] Building native node module.");
-  var pythonFlag = " --python \"" + python + "\"";
-
-  return Q.nfcall(exec, systemPath([
-    ".", "node_modules", ".bin", "node-gyp clean configure build" + pythonFlag
-  ]), {
-    cwd: ".",
-    maxBuffer: Number.MAX_VALUE
-  });
-})
-
-// Display a warning message about failing to build native node module.
-.fail(function(message) {
-  console.info("[nodegit] Failed to build and install nodegit.");
-  console.info(message.message);
-  console.info(message.stack);
-})
-
-// Display a success message.
-.then(function() {
-  console.info("[nodegit] Completed installation successfully.");
-})
-
-// Display a warning message about failing to build native node module.
-.fail(function(message) {
-  console.info("[nodegit] Failed to build nodegit.");
-  console.info(message.message);
-  console.info(message.stack);
 });
